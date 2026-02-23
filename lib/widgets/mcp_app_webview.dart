@@ -281,12 +281,15 @@ $jsBridge
         break;
 
       case 'ui/initialize':
-        // View is announcing it's ready — respond with host capabilities.
-        // Some views send this as a notification, others as a request.
-        debugPrint('MCP WebView: View sent ui/initialize notification, sending host init');
-        if (!_initialized) {
-          _sendInitialize();
-        }
+        // View is announcing it's ready — respond with host capabilities
+        // and send tool data. Treat this as the view being ready.
+        debugPrint('MCP WebView: View sent ui/initialize notification, sending host init + tool data');
+        _sendInitialize();
+        // The view is ready since it sent us this — send tool data now
+        // in case ui/notifications/initialized never comes.
+        _viewReady = true;
+        _sendToolInput();
+        _sendToolResult();
         break;
 
       case 'notifications/message':
@@ -311,6 +314,13 @@ $jsBridge
         // View is sending ui/initialize as a request expecting host capabilities back.
         debugPrint('MCP WebView: View sent ui/initialize request, returning host capabilities');
         _initialized = true;
+        // The view is ready since it sent us this — send tool data now.
+        _viewReady = true;
+        // Send tool data after returning the response (async to let response arrive first)
+        Future.delayed(Duration.zero, () {
+          _sendToolInput();
+          _sendToolResult();
+        });
         return {
           'hostContext': {
             'theme': 'dark',
