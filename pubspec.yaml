@@ -67,6 +67,7 @@ dependencies:
   file_picker: ^10.3.10
   flutter_custom_tabs: ^2.5.0
   flutter_web_auth_2: ^5.0.1
+  wakelock_plus: ^1.4.0
 
 dev_dependencies:
   flutter_test:

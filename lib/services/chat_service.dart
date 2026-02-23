@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:uuid/uuid.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/message.dart';
 import '../models/elicitation.dart';
 import 'openrouter_service.dart';
@@ -337,6 +338,19 @@ class ChatService {
     _partialReasoning = '';
     _wasCancelled = false;
 
+    // Keep the screen/CPU awake while the agentic loop is running so that
+    // Android doesn't suspend the network connection when the screen turns off.
+    try {
+      await WakelockPlus.enable();
+      print('ChatService: Wakelock enabled');
+    } catch (e) {
+      // Wakelock is best-effort; don't block the loop if it fails
+      // (e.g. on desktop platforms that don't support it).
+      print('ChatService: Failed to enable wakelock: $e');
+    }
+
+    try {
+
     while (unlimited || iterationCount < maxIterations) {
       iterationCount++;
 
@@ -627,6 +641,17 @@ class ChatService {
       print('ChatService: Warning - Maximum iterations reached');
       _flushPendingNotifications();
       _eventController.add(MaxIterationsReached());
+    }
+
+    } finally {
+      // Always release the wakelock when the agentic loop exits,
+      // whether it completed normally, errored, or was cancelled.
+      try {
+        await WakelockPlus.disable();
+        print('ChatService: Wakelock disabled');
+      } catch (e) {
+        print('ChatService: Failed to disable wakelock: $e');
+      }
     }
   }
 
