@@ -65,6 +65,7 @@ class _McpAppWebViewState extends State<McpAppWebView>
   /// Build the full HTML with CSP meta tag, theme CSS variables, and JS bridge injected
   String _buildHtml() {
     final csp = widget.uiService?.buildCsp(widget.uiData.cspMeta) ?? '';
+    debugPrint('MCP WebView: CSP: $csp');
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
