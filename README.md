@@ -2,6 +2,16 @@
 
 ![Joey MCP Client Feature Graphic](metadata/en-US/images/featureGraphic.png)
 
+<p align="center">
+  <a href="https://apps.apple.com/us/app/joey-mcp-client/id6759186174">
+    <img src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg" alt="Download on the App Store" height="50">
+  </a>
+  &nbsp;
+  <a href="https://play.google.com/store/apps/details?id=com.kaiserapps.joey">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg" alt="Get it on Google Play" height="50">
+  </a>
+</p>
+
 A cross-platform chat application built with Flutter that connects to AI models via [OpenRouter](https://openrouter.ai/) and remote [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) servers over Streamable HTTP.
 
 ## Key Features
