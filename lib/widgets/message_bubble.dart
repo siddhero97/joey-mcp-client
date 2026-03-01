@@ -203,19 +203,16 @@ class MessageBubble extends StatelessWidget {
                                 const SizedBox(height: 12),
                               ],
                               // Assistant content - no bubble
-                              // Wrapped in LayoutBuilder so that orientation
-                              // changes (which alter the available width)
-                              // produce a new key, forcing SmoothMarkdown's
-                              // RepaintBoundary to re-layout with the correct
-                              // constraints instead of painting with stale
+                              // Disable SmoothMarkdown's RepaintBoundary so
+                              // orientation changes immediately repaint with
+                              // the correct width instead of caching stale
                               // portrait/landscape dimensions.
                               if (message.content.isNotEmpty)
-                                LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    return SmoothMarkdown(
-                                  key: ValueKey('${message.id}_${constraints.maxWidth.toInt()}'),
+                                SmoothMarkdown(
+                                  key: ValueKey(message.id),
                                   data: message.content,
                                   selectable: true,
+                                  useRepaintBoundary: false,
                                   useEnhancedComponents: true,
                                   plugins: ParserPluginRegistry()
                                     ..register(const MermaidPlugin()),
@@ -290,8 +287,6 @@ class MessageBubble extends StatelessWidget {
                                       Uri.parse(url),
                                       mode: LaunchMode.externalApplication,
                                     );
-                                  },
-                                );
                                   },
                                 ),
                               // Render images from imageData if present

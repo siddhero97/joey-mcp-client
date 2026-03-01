@@ -632,7 +632,7 @@ $jsBridge
           transparentBackground: true,
           disableHorizontalScroll: true,
           supportZoom: false,
-          useHybridComposition: true,
+          useHybridComposition: false,
           allowsInlineMediaPlayback: true,
           mediaPlaybackRequiresUserGesture: false,
           verticalScrollBarEnabled: true,
