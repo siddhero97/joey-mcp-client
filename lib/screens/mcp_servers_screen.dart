@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/mcp_server.dart';
 import '../services/database_service.dart';
+import '../services/mcp_ping_service.dart';
 import '../utils/in_app_browser.dart';
 import '../utils/privacy_constants.dart';
 
@@ -17,6 +19,9 @@ class McpServersScreen extends StatefulWidget {
 class _McpServersScreenState extends State<McpServersScreen> {
   List<McpServer> _servers = [];
   bool _isLoading = true;
+
+  /// Ping status for each server, keyed by server ID
+  final Map<String, McpPingResult> _pingResults = {};
 
   @override
   void initState() {
@@ -32,6 +37,8 @@ class _McpServersScreenState extends State<McpServersScreen> {
         _servers = servers;
         _isLoading = false;
       });
+      // Ping all servers after loading
+      _pingAllServers();
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -40,6 +47,33 @@ class _McpServersScreenState extends State<McpServersScreen> {
         ).showSnackBar(SnackBar(content: Text('Error loading servers: $e')));
       }
     }
+  }
+
+  /// Ping all servers concurrently and update their status
+  Future<void> _pingAllServers() async {
+    for (final server in _servers) {
+      // Set initial "checking" status
+      if (mounted) {
+        setState(() {
+          _pingResults[server.id] = const McpPingResult.checking();
+        });
+      }
+    }
+
+    // Ping all servers concurrently
+    final futures = _servers.map((server) async {
+      final result = await McpPingService.ping(
+        server.url,
+        headers: server.headers,
+      );
+      if (mounted) {
+        setState(() {
+          _pingResults[server.id] = result;
+        });
+      }
+    });
+
+    await Future.wait(futures);
   }
 
   Future<void> _deleteServer(McpServer server) async {
@@ -192,6 +226,51 @@ class _McpServersScreenState extends State<McpServersScreen> {
     );
   }
 
+  /// Build a status dot widget based on ping result
+  Widget _buildStatusDot(McpPingResult? result) {
+    const double dotSize = 10;
+
+    if (result == null || result.status == McpPingStatus.checking) {
+      // Checking / unknown — grey outlined dot
+      return Container(
+        width: dotSize,
+        height: dotSize,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.grey,
+            width: 1.5,
+          ),
+        ),
+      );
+    }
+
+    if (result.status == McpPingStatus.reachable) {
+      // Reachable — solid green dot
+      return Container(
+        width: dotSize,
+        height: dotSize,
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.green,
+        ),
+      );
+    }
+
+    // Unreachable — solid red dot
+    return Tooltip(
+      message: result.errorMessage ?? 'Unreachable',
+      child: Container(
+        width: dotSize,
+        height: dotSize,
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.red,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -229,13 +308,20 @@ class _McpServersScreenState extends State<McpServersScreen> {
               itemCount: _servers.length,
               itemBuilder: (context, index) {
                 final server = _servers[index];
+                final pingResult = _pingResults[server.id];
                 return Card(
                   margin: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 8,
                   ),
                   child: ListTile(
-                    title: Text(server.name),
+                    title: Row(
+                      children: [
+                        _buildStatusDot(pingResult),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(server.name)),
+                      ],
+                    ),
                     subtitle: Text(
                       server.url,
                       style: Theme.of(context).textTheme.bodySmall,
@@ -286,6 +372,12 @@ class _McpServerDialogState extends State<_McpServerDialog> {
   late final TextEditingController _oauthClientIdController;
   late final TextEditingController _oauthClientSecretController;
 
+  /// Debounce timer for URL ping
+  Timer? _pingDebounceTimer;
+
+  /// Current ping result for the URL field
+  McpPingResult? _urlPingResult;
+
   @override
   void initState() {
     super.initState();
@@ -304,16 +396,66 @@ class _McpServerDialogState extends State<_McpServerDialog> {
     _oauthClientSecretController = TextEditingController(
       text: widget.server?.oauthClientSecret ?? '',
     );
+
+    // Listen to URL field changes for debounced ping
+    _urlController.addListener(_onUrlChanged);
+
+    // If editing an existing server with a URL, ping it
+    if (widget.server != null && widget.server!.url.isNotEmpty) {
+      _debouncePing(widget.server!.url);
+    }
   }
 
   @override
   void dispose() {
+    _pingDebounceTimer?.cancel();
+    _urlController.removeListener(_onUrlChanged);
     _nameController.dispose();
     _urlController.dispose();
     _headersController.dispose();
     _oauthClientIdController.dispose();
     _oauthClientSecretController.dispose();
     super.dispose();
+  }
+
+  void _onUrlChanged() {
+    final url = _urlController.text.trim();
+    _debouncePing(url);
+  }
+
+  void _debouncePing(String url) {
+    _pingDebounceTimer?.cancel();
+
+    // Check if URL looks valid
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        !uri.hasScheme ||
+        !uri.hasAuthority ||
+        (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      // Not a valid URL yet — clear any previous result
+      if (_urlPingResult != null) {
+        setState(() {
+          _urlPingResult = null;
+        });
+      }
+      return;
+    }
+
+    // Set checking state immediately
+    setState(() {
+      _urlPingResult = const McpPingResult.checking();
+    });
+
+    // Debounce the actual ping
+    _pingDebounceTimer = Timer(const Duration(milliseconds: 300), () async {
+      final headers = _parseHeaders();
+      final result = await McpPingService.ping(url, headers: headers);
+      if (mounted && _urlController.text.trim() == url) {
+        setState(() {
+          _urlPingResult = result;
+        });
+      }
+    });
   }
 
   Map<String, String>? _parseHeaders() {
@@ -371,6 +513,74 @@ class _McpServerDialogState extends State<_McpServerDialog> {
     );
   }
 
+  /// Build the URL ping status widget shown beneath the URL field
+  Widget _buildUrlPingStatus() {
+    if (_urlPingResult == null) {
+      return const SizedBox.shrink();
+    }
+
+    final result = _urlPingResult!;
+    IconData icon;
+    Color color;
+    String text;
+
+    switch (result.status) {
+      case McpPingStatus.checking:
+        return Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Checking server...',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        );
+      case McpPingStatus.reachable:
+        icon = Icons.check_circle;
+        color = Colors.green;
+        text = 'Server is reachable';
+        break;
+      case McpPingStatus.unreachable:
+        icon = Icons.error;
+        color = Colors.red;
+        text = result.errorMessage != null
+            ? 'Server unreachable: ${result.errorMessage}'
+            : 'Server unreachable';
+        break;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -395,6 +605,7 @@ class _McpServerDialogState extends State<_McpServerDialog> {
                 border: OutlineInputBorder(),
               ),
             ),
+            _buildUrlPingStatus(),
             const SizedBox(height: 16),
             TextField(
               controller: _headersController,

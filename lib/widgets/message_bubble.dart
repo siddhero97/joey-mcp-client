@@ -203,8 +203,17 @@ class MessageBubble extends StatelessWidget {
                                 const SizedBox(height: 12),
                               ],
                               // Assistant content - no bubble
+                              // Wrapped in LayoutBuilder so that orientation
+                              // changes (which alter the available width)
+                              // produce a new key, forcing SmoothMarkdown's
+                              // RepaintBoundary to re-layout with the correct
+                              // constraints instead of painting with stale
+                              // portrait/landscape dimensions.
                               if (message.content.isNotEmpty)
-                                SmoothMarkdown(
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    return SmoothMarkdown(
+                                  key: ValueKey('${message.id}_${constraints.maxWidth.toInt()}'),
                                   data: message.content,
                                   selectable: true,
                                   useEnhancedComponents: true,
@@ -281,6 +290,8 @@ class MessageBubble extends StatelessWidget {
                                       Uri.parse(url),
                                       mode: LaunchMode.externalApplication,
                                     );
+                                  },
+                                );
                                   },
                                 ),
                               // Render images from imageData if present

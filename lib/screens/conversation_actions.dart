@@ -64,6 +64,9 @@ mixin ConversationActionsMixin on State<ChatScreen> {
 
   Future<void> exportConversationAsJson() async {
     final provider = context.read<ConversationProvider>();
+
+    // Load blob data (images/audio) before export so they're included
+    await provider.loadAllBlobsForConversation(widget.conversation.id);
     final messages = provider.getMessages(widget.conversation.id);
 
     if (messages.isEmpty) {

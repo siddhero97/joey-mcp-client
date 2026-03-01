@@ -19,10 +19,17 @@ class ConversationProvider extends ChangeNotifier {
     _conversations.clear();
     _conversations.addAll(await _db.getAllConversations());
 
-    // Load messages for each conversation
+    // Load messages for each conversation (without blob data to avoid CursorWindow overflow)
     for (final conversation in _conversations) {
-      final messages = await _db.getMessagesForConversation(conversation.id);
-      _messages[conversation.id] = messages;
+      try {
+        final messages = await _db.getMessagesForConversation(conversation.id);
+        _messages[conversation.id] = messages;
+      } catch (e) {
+        // If a conversation's messages fail to load (e.g. corrupt data),
+        // initialize with an empty list so it doesn't block the entire app.
+        _messages[conversation.id] = [];
+        print('Warning: Failed to load messages for conversation ${conversation.id}: $e');
+      }
     }
 
     _isInitialized = true;
@@ -31,6 +38,42 @@ class ConversationProvider extends ChangeNotifier {
 
   List<Message> getMessages(String conversationId) {
     return List.unmodifiable(_messages[conversationId] ?? []);
+  }
+
+  /// Load blob data (imageData, audioData) for a single message from DB
+  /// and update the in-memory message.
+  Future<void> loadBlobData(String conversationId, String messageId) async {
+    final messages = _messages[conversationId];
+    if (messages == null) return;
+
+    final index = messages.indexWhere((m) => m.id == messageId);
+    if (index == -1) return;
+
+    final blobData = await _db.getMessageBlobData(messageId);
+    final imageData = blobData['imageData'];
+    final audioData = blobData['audioData'];
+
+    // Only update if there's actually blob data to load
+    if (imageData != null || audioData != null) {
+      messages[index] = messages[index].copyWith(
+        imageData: imageData,
+        audioData: audioData,
+      );
+      notifyListeners();
+    }
+  }
+
+  /// Load full messages (with blobs) for an entire conversation.
+  /// Replaces in-memory messages with full versions from DB.
+  /// Used before API calls and export to ensure blob data is available.
+  Future<void> loadAllBlobsForConversation(String conversationId) async {
+    try {
+      final fullMessages = await _db.getFullMessagesForConversation(conversationId);
+      _messages[conversationId] = fullMessages;
+      notifyListeners();
+    } catch (e) {
+      print('Warning: Failed to load full messages for conversation $conversationId: $e');
+    }
   }
 
   Future<Conversation> createConversation({

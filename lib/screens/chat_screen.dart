@@ -438,7 +438,8 @@ class _ChatScreenState extends State<ChatScreen>
           });
         }
 
-        // Get all messages for context
+        // Get all messages for context (load blobs first for API calls)
+        await provider.loadAllBlobsForConversation(widget.conversation.id);
         final messages = provider.getMessages(widget.conversation.id);
 
         // Check if the model supports image input
@@ -813,7 +814,8 @@ class _ChatScreenState extends State<ChatScreen>
         });
       }
 
-      // Get remaining messages for context
+      // Get remaining messages for context (load blobs first for API calls)
+      await provider.loadAllBlobsForConversation(widget.conversation.id);
       final remainingMessages = provider.getMessages(widget.conversation.id);
 
       final modelSupportsImages =
@@ -872,12 +874,22 @@ class _ChatScreenState extends State<ChatScreen>
     Message message,
     ConversationProvider provider,
   ) async {
+    // Load blob data for this message so images/audio are available in the edit dialog
+    await provider.loadBlobData(widget.conversation.id, message.id);
+    if (!mounted) return;
+    // Re-fetch message after blob load to get updated imageData/audioData
+    final messages = provider.getMessages(widget.conversation.id);
+    final updatedMessage = messages.firstWhere(
+      (m) => m.id == message.id,
+      orElse: () => message,
+    );
+
     final result = await showDialog<EditMessageResult>(
       context: context,
       builder: (context) => EditMessageDialog(
-        initialText: message.content,
-        imageDataJson: message.imageData,
-        audioDataJson: message.audioData,
+        initialText: updatedMessage.content,
+        imageDataJson: updatedMessage.imageData,
+        audioDataJson: updatedMessage.audioData,
       ),
     );
 

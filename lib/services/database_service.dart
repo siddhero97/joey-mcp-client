@@ -308,13 +308,82 @@ class DatabaseService {
     String conversationId,
   ) async {
     final db = await database;
+    // Exclude imageData and audioData to avoid CursorWindow overflow on Android.
+    // These blob columns can exceed the ~2MB per-row limit.
+    // Use getMessageBlobData() or getFullMessagesForConversation() to load them.
     final result = await db.query(
       'messages',
+      columns: [
+        'id',
+        'conversationId',
+        'role',
+        'content',
+        'timestamp',
+        'reasoning',
+        'toolCallData',
+        'toolCallId',
+        'toolName',
+        'elicitationData',
+        'notificationData',
+        'usageData',
+        'uiData',
+      ],
       where: 'conversationId = ?',
       whereArgs: [conversationId],
       orderBy: 'timestamp ASC',
     );
     return result.map((map) => Message.fromMap(map)).toList();
+  }
+
+  /// Fetch just the blob columns (imageData, audioData) for a single message.
+  /// Returns a map with 'imageData' and 'audioData' keys (nullable).
+  Future<Map<String, String?>> getMessageBlobData(String messageId) async {
+    final db = await database;
+    final result = await db.query(
+      'messages',
+      columns: ['imageData', 'audioData'],
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+    if (result.isEmpty) {
+      return {'imageData': null, 'audioData': null};
+    }
+    return {
+      'imageData': result.first['imageData'] as String?,
+      'audioData': result.first['audioData'] as String?,
+    };
+  }
+
+  /// Fetch all messages for a conversation with ALL columns including blobs.
+  /// Each message is fetched individually to avoid CursorWindow overflow,
+  /// since each row gets its own cursor window.
+  /// Used for export and API calls that need image/audio data.
+  Future<List<Message>> getFullMessagesForConversation(
+    String conversationId,
+  ) async {
+    final db = await database;
+    // First get the message IDs in order
+    final idResult = await db.query(
+      'messages',
+      columns: ['id'],
+      where: 'conversationId = ?',
+      whereArgs: [conversationId],
+      orderBy: 'timestamp ASC',
+    );
+
+    final messages = <Message>[];
+    for (final row in idResult) {
+      final messageId = row['id'] as String;
+      final msgResult = await db.query(
+        'messages',
+        where: 'id = ?',
+        whereArgs: [messageId],
+      );
+      if (msgResult.isNotEmpty) {
+        messages.add(Message.fromMap(msgResult.first));
+      }
+    }
+    return messages;
   }
 
   Future<void> deleteMessagesForConversation(String conversationId) async {

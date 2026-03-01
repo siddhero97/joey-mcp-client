@@ -334,6 +334,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     try {
+      // Load blob data (images/audio) for all conversations before export
+      for (final conversation in provider.conversations) {
+        await provider.loadAllBlobsForConversation(conversation.id);
+      }
+
       final jsonString =
           await ConversationImportExportService.exportAllConversations(provider);
 
