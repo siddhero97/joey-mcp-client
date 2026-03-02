@@ -103,9 +103,9 @@ flutter run
 
 ## Roadmap
 
-- [ ] MCP resource browsing UI (list and read server-provided resources)
+- [x] MCP resource browsing UI (list and read server-provided resources)
 - [ ] Third-party OpenAI-compatible API support (use your own endpoint as an alternative to OpenRouter)
-- [ ] Conversation import/export (JSON backup and restore)
+- [x] Conversation import/export (JSON backup and restore)
 - [ ] Model parameters (temperature, top_p, etc.)
 - [ ] Document & file attachments (PDFs, text files, etc.)
 - [ ] Per-conversation system prompts
