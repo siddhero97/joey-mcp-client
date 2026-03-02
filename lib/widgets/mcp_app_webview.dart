@@ -124,20 +124,55 @@ class _McpAppWebViewState extends State<McpAppWebView>
     }
   }
 
+  /// Whether the platform (OS) is currently in dark mode.
+  /// On iOS, WKWebView follows the system appearance for prefers-color-scheme
+  /// media queries, so we need to match our injected CSS to the platform
+  /// brightness rather than always using the app's dark theme.
+  bool _platformIsDark(BuildContext context) {
+    return MediaQuery.platformBrightnessOf(context) == Brightness.dark;
+  }
+
   /// Build the full HTML with CSP meta tag, theme CSS variables, and JS bridge injected
   String _buildHtml() {
     final csp = widget.uiService?.buildCsp(widget.uiData.cspMeta) ?? '';
     debugPrint('MCP WebView: CSP: $csp');
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
 
-    // Get theme colors as CSS values
-    final bgColor = _colorToCss(colorScheme.surface);
-    final textColor = _colorToCss(colorScheme.onSurface);
-    final primaryColor = _colorToCss(colorScheme.primary);
-    final secondaryColor = _colorToCss(colorScheme.secondary);
-    final errorColor = _colorToCss(colorScheme.error);
-    final borderColor = _colorToCss(colorScheme.outline);
+    final isDark = _platformIsDark(context);
+
+    // Pick colors based on platform brightness so that the host-injected CSS
+    // is consistent with the WebView's prefers-color-scheme media queries.
+    // On iOS, WKWebView follows the OS appearance, so when the OS is in light
+    // mode we must provide a light palette — otherwise the host body styles
+    // are dark but MCP app @media (prefers-color-scheme: dark) rules don't
+    // activate, causing mismatched backgrounds.
+    final String bgColor;
+    final String textColor;
+    final String primaryColor;
+    final String secondaryColor;
+    final String errorColor;
+    final String borderColor;
+
+    if (isDark) {
+      final colorScheme = Theme.of(context).colorScheme;
+      bgColor = _colorToCss(colorScheme.surface);
+      textColor = _colorToCss(colorScheme.onSurface);
+      primaryColor = _colorToCss(colorScheme.primary);
+      secondaryColor = _colorToCss(colorScheme.secondary);
+      errorColor = _colorToCss(colorScheme.error);
+      borderColor = _colorToCss(colorScheme.outline);
+    } else {
+      // Light palette for when the OS is in light mode.
+      // These are intentionally neutral so they look reasonable alongside
+      // any MCP app's own light-mode styles.
+      bgColor = 'rgb(255, 255, 255)';
+      textColor = 'rgb(29, 29, 31)';
+      primaryColor = 'rgb(0, 122, 255)';
+      secondaryColor = 'rgb(88, 86, 214)';
+      errorColor = 'rgb(255, 59, 48)';
+      borderColor = 'rgb(199, 199, 204)';
+    }
+
+    final colorSchemeValue = isDark ? 'dark' : 'light';
 
     // JavaScript bridge shim
     // This intercepts postMessage calls and routes them through flutter_inappwebview's handler.
@@ -239,7 +274,7 @@ class _McpAppWebViewState extends State<McpAppWebView>
   --mcp-host-secondary: $secondaryColor;
   --mcp-host-error: $errorColor;
   --mcp-host-border: $borderColor;
-  color-scheme: dark;
+  color-scheme: $colorSchemeValue;
 }
 body {
   background-color: $bgColor;
@@ -399,7 +434,7 @@ $jsBridge
             'updateModelContext': {},
           },
           'hostContext': {
-            'theme': 'dark',
+            'theme': _platformIsDark(context) ? 'dark' : 'light',
             'locale': 'en',
             'displayMode': widget.displayMode,
             'availableDisplayModes': widget.hostAvailableDisplayModes,
