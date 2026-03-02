@@ -34,6 +34,8 @@ class Message {
   usageData; // JSON string of usage/cost data from OpenRouter
   final String?
   uiData; // JSON string of McpAppUiData for MCP App UI rendering
+  final bool
+  hasUiData; // Flag indicating uiData exists in DB (for lazy loading)
 
   Message({
     required this.id,
@@ -51,7 +53,8 @@ class Message {
     this.audioData,
     this.usageData,
     this.uiData,
-  });
+    bool? hasUiData,
+  }) : hasUiData = hasUiData ?? (uiData != null);
 
   Map<String, dynamic> toMap() {
     return {
@@ -74,6 +77,12 @@ class Message {
   }
 
   factory Message.fromMap(Map<String, dynamic> map) {
+    final uiData = map['uiData'] as String?;
+    // hasUiData can be set explicitly (e.g. from lightweight DB query that excludes uiData blob)
+    // or inferred from the presence of uiData.
+    final hasUiData = map['hasUiData'] != null
+        ? (map['hasUiData'] as int) == 1
+        : uiData != null;
     return Message(
       id: map['id'],
       conversationId: map['conversationId'],
@@ -89,7 +98,8 @@ class Message {
       imageData: map['imageData'],
       audioData: map['audioData'],
       usageData: map['usageData'],
-      uiData: map['uiData'],
+      uiData: uiData,
+      hasUiData: hasUiData,
     );
   }
 
@@ -109,6 +119,7 @@ class Message {
     String? audioData,
     String? usageData,
     String? uiData,
+    bool? hasUiData,
   }) {
     return Message(
       id: id ?? this.id,
@@ -126,6 +137,7 @@ class Message {
       audioData: audioData ?? this.audioData,
       usageData: usageData ?? this.usageData,
       uiData: uiData ?? this.uiData,
+      hasUiData: hasUiData ?? this.hasUiData,
     );
   }
 

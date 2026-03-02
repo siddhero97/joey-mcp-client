@@ -519,8 +519,25 @@ class _MessageListState extends State<MessageList> {
 
             // Format tool result messages
             if (message.role == MessageRole.tool) {
-              // Check for MCP App UI data
-              if (message.uiData != null) {
+              // Check for MCP App UI data (hasUiData is set even when uiData blob isn't loaded)
+              if (message.hasUiData) {
+                // If uiData blob hasn't been loaded yet, show a loading placeholder
+                if (message.uiData == null) {
+                  return Column(
+                    key: ValueKey(message.id),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ThinkingIndicator(message: message),
+                      SizedBox(
+                        height: 300.0,
+                        child: Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                      ),
+                    ],
+                  );
+                }
+
                 try {
                   // Validate uiData can be parsed
                   McpAppUiData.fromJson(

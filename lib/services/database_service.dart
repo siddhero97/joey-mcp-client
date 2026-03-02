@@ -308,55 +308,146 @@ class DatabaseService {
     String conversationId,
   ) async {
     final db = await database;
-    // Exclude imageData and audioData to avoid CursorWindow overflow on Android.
-    // These blob columns can exceed the ~2MB per-row limit.
+    // Exclude imageData, audioData, and uiData to avoid CursorWindow overflow on Android.
+    // These columns can exceed the ~2MB per-row limit.
     // Use getMessageBlobData() or getFullMessagesForConversation() to load them.
-    final result = await db.query(
-      'messages',
-      columns: [
-        'id',
-        'conversationId',
-        'role',
-        'content',
-        'timestamp',
-        'reasoning',
-        'toolCallData',
-        'toolCallId',
-        'toolName',
-        'elicitationData',
-        'notificationData',
-        'usageData',
-        'uiData',
-      ],
-      where: 'conversationId = ?',
-      whereArgs: [conversationId],
-      orderBy: 'timestamp ASC',
-    );
-    return result.map((map) => Message.fromMap(map)).toList();
+    // We use a raw query to include a computed 'hasUiData' flag so the UI knows
+    // which messages have uiData without loading the (potentially large) content.
+    try {
+      final result = await db.rawQuery(
+        '''SELECT id, conversationId, role, content, timestamp,
+           reasoning, toolCallData, toolCallId, toolName,
+           elicitationData, notificationData, usageData,
+           CASE WHEN uiData IS NOT NULL THEN 1 ELSE 0 END AS hasUiData
+           FROM messages WHERE conversationId = ? ORDER BY timestamp ASC''',
+        [conversationId],
+      );
+      return result.map((map) => Message.fromMap(map)).toList();
+    } catch (e) {
+      // Fallback: if the batch query still fails (e.g. very large content column),
+      // load messages one at a time to avoid CursorWindow overflow.
+      print('Warning: Batch message query failed, falling back to per-message loading: $e');
+      final idResult = await db.query(
+        'messages',
+        columns: ['id'],
+        where: 'conversationId = ?',
+        whereArgs: [conversationId],
+        orderBy: 'timestamp ASC',
+      );
+
+      final messages = <Message>[];
+      for (final row in idResult) {
+        final messageId = row['id'] as String;
+        try {
+          final msgResult = await db.query(
+            'messages',
+            where: 'id = ?',
+            whereArgs: [messageId],
+          );
+          if (msgResult.isNotEmpty) {
+            messages.add(Message.fromMap(msgResult.first));
+          }
+        } catch (e2) {
+          print('Warning: Failed to load message $messageId: $e2');
+        }
+      }
+      return messages;
+    }
   }
 
-  /// Fetch just the blob columns (imageData, audioData) for a single message.
-  /// Returns a map with 'imageData' and 'audioData' keys (nullable).
+  /// Read a single large text column in chunks using SUBSTR() to bypass
+  /// Android's ~2MB CursorWindow per-row limit.
+  /// Returns null if the column is NULL or the row doesn't exist.
+  Future<String?> _readLargeColumn(Database db, String table, String column, String whereClause, List<Object?> whereArgs) async {
+    // First get the length
+    final lenResult = await db.rawQuery(
+      'SELECT LENGTH($column) AS len FROM $table WHERE $whereClause',
+      whereArgs,
+    );
+    if (lenResult.isEmpty || lenResult.first['len'] == null) return null;
+
+    final totalLength = lenResult.first['len'] as int;
+    if (totalLength == 0) return '';
+
+    // Read in 1MB chunks (well under the ~2MB CursorWindow limit)
+    const chunkSize = 1000000;
+    final buffer = StringBuffer();
+    for (int offset = 0; offset < totalLength; offset += chunkSize) {
+      final result = await db.rawQuery(
+        'SELECT SUBSTR($column, ${offset + 1}, $chunkSize) AS chunk FROM $table WHERE $whereClause',
+        whereArgs,
+      );
+      if (result.isNotEmpty && result.first['chunk'] != null) {
+        buffer.write(result.first['chunk'] as String);
+      }
+    }
+    return buffer.toString();
+  }
+
+  /// Fetch just the blob columns (imageData, audioData, uiData) for a single message.
+  /// Each column is fetched in a separate query to avoid CursorWindow overflow
+  /// when multiple large blobs exist on the same message.
+  /// Falls back to chunked reading if a single column exceeds the CursorWindow limit.
+  /// Returns a map with 'imageData', 'audioData', and 'uiData' keys (nullable).
   Future<Map<String, String?>> getMessageBlobData(String messageId) async {
     final db = await database;
-    final result = await db.query(
-      'messages',
-      columns: ['imageData', 'audioData'],
-      where: 'id = ?',
-      whereArgs: [messageId],
-    );
-    if (result.isEmpty) {
-      return {'imageData': null, 'audioData': null};
-    }
-    return {
-      'imageData': result.first['imageData'] as String?,
-      'audioData': result.first['audioData'] as String?,
+    final blobs = <String, String?>{
+      'imageData': null,
+      'audioData': null,
+      'uiData': null,
     };
+    for (final column in ['imageData', 'audioData', 'uiData']) {
+      try {
+        final result = await db.query(
+          'messages',
+          columns: [column],
+          where: 'id = ?',
+          whereArgs: [messageId],
+        );
+        if (result.isNotEmpty) {
+          blobs[column] = result.first[column] as String?;
+        }
+      } catch (e) {
+        // Single column exceeds CursorWindow — read in chunks
+        try {
+          blobs[column] = await _readLargeColumn(db, 'messages', column, 'id = ?', [messageId]);
+        } catch (e2) {
+          print('Warning: Failed to load $column for message $messageId: $e2');
+        }
+      }
+    }
+    return blobs;
+  }
+
+  /// Fetch just the uiData column for a single message.
+  /// Uses its own query to avoid CursorWindow overflow from other large blobs.
+  /// Falls back to chunked reading if the value exceeds the CursorWindow limit.
+  Future<String?> getMessageUiData(String messageId) async {
+    final db = await database;
+    try {
+      final result = await db.query(
+        'messages',
+        columns: ['uiData'],
+        where: 'id = ?',
+        whereArgs: [messageId],
+      );
+      if (result.isNotEmpty) {
+        return result.first['uiData'] as String?;
+      }
+    } catch (e) {
+      // Single column exceeds CursorWindow — read in chunks
+      try {
+        return await _readLargeColumn(db, 'messages', 'uiData', 'id = ?', [messageId]);
+      } catch (e2) {
+        print('Warning: Failed to load uiData for message $messageId: $e2');
+      }
+    }
+    return null;
   }
 
   /// Fetch all messages for a conversation with ALL columns including blobs.
-  /// Each message is fetched individually to avoid CursorWindow overflow,
-  /// since each row gets its own cursor window.
+  /// Fetches lightweight columns first, then loads each blob column individually
+  /// per message to avoid CursorWindow overflow on Android.
   /// Used for export and API calls that need image/audio data.
   Future<List<Message>> getFullMessagesForConversation(
     String conversationId,
@@ -374,13 +465,56 @@ class DatabaseService {
     final messages = <Message>[];
     for (final row in idResult) {
       final messageId = row['id'] as String;
-      final msgResult = await db.query(
-        'messages',
-        where: 'id = ?',
-        whereArgs: [messageId],
-      );
-      if (msgResult.isNotEmpty) {
-        messages.add(Message.fromMap(msgResult.first));
+      try {
+        // Load lightweight columns (no blobs)
+        final lightResult = await db.query(
+          'messages',
+          columns: [
+            'id', 'conversationId', 'role', 'content', 'timestamp',
+            'reasoning', 'toolCallData', 'toolCallId', 'toolName',
+            'elicitationData', 'notificationData', 'usageData',
+          ],
+          where: 'id = ?',
+          whereArgs: [messageId],
+        );
+        if (lightResult.isEmpty) continue;
+
+        // Load each blob column individually to avoid CursorWindow overflow.
+        // Falls back to chunked SUBSTR reading if a single column is still too large.
+        final blobValues = <String, String?>{
+          'imageData': null,
+          'audioData': null,
+          'uiData': null,
+        };
+        for (final column in blobValues.keys) {
+          try {
+            final blobResult = await db.query(
+              'messages',
+              columns: [column],
+              where: 'id = ?',
+              whereArgs: [messageId],
+            );
+            if (blobResult.isNotEmpty) {
+              blobValues[column] = blobResult.first[column] as String?;
+            }
+          } catch (e) {
+            // Single column exceeds CursorWindow — read in chunks
+            try {
+              blobValues[column] = await _readLargeColumn(db, 'messages', column, 'id = ?', [messageId]);
+            } catch (e2) {
+              print('Warning: Failed to load $column for message $messageId: $e2');
+            }
+          }
+        }
+
+        // Merge blob data into the lightweight map
+        final map = Map<String, dynamic>.from(lightResult.first);
+        map['imageData'] = blobValues['imageData'];
+        map['audioData'] = blobValues['audioData'];
+        map['uiData'] = blobValues['uiData'];
+        messages.add(Message.fromMap(map));
+      } catch (e) {
+        print('Warning: Failed to load message $messageId: $e');
       }
     }
     return messages;

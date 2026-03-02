@@ -98,6 +98,9 @@ class _ChatScreenState extends State<ChatScreen>
   /// Host-supported display modes
   static const List<String> _hostAvailableDisplayModes = ['inline', 'fullscreen', 'pip'];
 
+  /// Whether we're currently loading uiData blobs
+  bool _loadingUiData = false;
+
   // --- ChatEventHandlerMixin interface ---
   @override
   bool get isLoading => _isLoading;
@@ -1140,8 +1143,23 @@ class _ChatScreenState extends State<ChatScreen>
     final messages = provider.getMessages(widget.conversation.id);
 
     // Find all messages that have UI data (active WebViews)
-    final uiMessages = messages.where((m) => m.uiData != null).toList();
+    // Use hasUiData flag which is available even when uiData blob isn't loaded
+    final uiMessages = messages.where((m) => m.hasUiData).toList();
     if (uiMessages.isEmpty) return [];
+
+    // Check if any messages need their uiData loaded
+    final needsLoading = uiMessages.any((m) => m.uiData == null);
+    if (needsLoading) {
+      // Trigger async load of uiData for messages that need it (once)
+      if (!_loadingUiData) {
+        _loadingUiData = true;
+        provider.loadUiDataForConversation(widget.conversation.id).then((_) {
+          _loadingUiData = false;
+        });
+      }
+      // Return empty for now — will rebuild when data is loaded via notifyListeners
+      return [];
+    }
 
     final widgets = <Widget>[];
 

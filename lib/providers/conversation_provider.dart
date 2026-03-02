@@ -40,7 +40,7 @@ class ConversationProvider extends ChangeNotifier {
     return List.unmodifiable(_messages[conversationId] ?? []);
   }
 
-  /// Load blob data (imageData, audioData) for a single message from DB
+  /// Load blob data (imageData, audioData, uiData) for a single message from DB
   /// and update the in-memory message.
   Future<void> loadBlobData(String conversationId, String messageId) async {
     final messages = _messages[conversationId];
@@ -52,12 +52,14 @@ class ConversationProvider extends ChangeNotifier {
     final blobData = await _db.getMessageBlobData(messageId);
     final imageData = blobData['imageData'];
     final audioData = blobData['audioData'];
+    final uiData = blobData['uiData'];
 
     // Only update if there's actually blob data to load
-    if (imageData != null || audioData != null) {
+    if (imageData != null || audioData != null || uiData != null) {
       messages[index] = messages[index].copyWith(
         imageData: imageData,
         audioData: audioData,
+        uiData: uiData,
       );
       notifyListeners();
     }
@@ -73,6 +75,32 @@ class ConversationProvider extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       print('Warning: Failed to load full messages for conversation $conversationId: $e');
+    }
+  }
+
+  /// Load uiData for all messages in a conversation that have hasUiData=true
+  /// but haven't had their uiData loaded yet.
+  /// Used by the UI layer to lazy-load uiData for WebView rendering.
+  Future<void> loadUiDataForConversation(String conversationId) async {
+    final messages = _messages[conversationId];
+    if (messages == null) return;
+
+    bool changed = false;
+    for (int i = 0; i < messages.length; i++) {
+      if (messages[i].hasUiData && messages[i].uiData == null) {
+        try {
+          final uiData = await _db.getMessageUiData(messages[i].id);
+          if (uiData != null) {
+            messages[i] = messages[i].copyWith(uiData: uiData);
+            changed = true;
+          }
+        } catch (e) {
+          print('Warning: Failed to load uiData for message ${messages[i].id}: $e');
+        }
+      }
+    }
+    if (changed) {
+      notifyListeners();
     }
   }
 
