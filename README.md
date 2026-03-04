@@ -110,6 +110,7 @@ flutter run
 - [ ] Document & file attachments (PDFs, text files, etc.)
 - [ ] Per-conversation system prompts
 - [ ] Theme switching (light mode / custom themes)
+- [ ] Local device tool integrations (calendar, contacts, SMS, email, reminders, location, phone calls)
 
 ## Finding MCP Servers
 
