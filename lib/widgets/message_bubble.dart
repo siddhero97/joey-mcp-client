@@ -433,41 +433,53 @@ class MessageBubble extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      child: Row(
-        children: [
-          Expanded(
-            child: Divider(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  size: 14,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Reserve 10px per divider + 24px padding + 20px icon+gap
+          final maxTextWidth = constraints.maxWidth - 20 - 24 - 20;
+          return Row(
+            children: [
+              Expanded(
+                child: Divider(
+                  color: Theme.of(context).colorScheme.outlineVariant,
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  message.content,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 12,
-                    fontStyle: FontStyle.italic,
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxTextWidth),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        icon,
+                        size: 14,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          message.content,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 12,
+                            fontStyle: FontStyle.italic,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Divider(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-          ),
-        ],
+              ),
+              Expanded(
+                child: Divider(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
