@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/mcp_server.dart';
 import '../services/database_service.dart';
 import '../screens/model_picker_screen.dart';
+import '../screens/mcp_servers_screen.dart';
 
 /// Result returned by [McpServerSelectionDialog] containing the selected MCP
 /// servers and the (possibly overridden) model ID.
@@ -195,7 +196,15 @@ class _McpServerSelectionDialogState extends State<McpServerSelectionDialog> {
         ),
         TextButton(
           onPressed: () {
-            if (_selectedModel != null) {
+            if (widget.isEditing) {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const McpServersScreen(),
+                ),
+              );
+            } else if (_selectedModel != null) {
               Navigator.pop(
                 context,
                 McpServerSelectionResult(
