@@ -31,6 +31,7 @@ mixin ChatEventHandlerMixin on State<ChatScreen> {
   String getCurrentModel();
   void refreshToolsForServer(String serverId);
   void handleServerNeedsOAuth(String serverId, String serverUrl);
+  void scrollToBottomIfAtBottom();
 
   /// Handle events from the ChatService
   void handleChatEvent(ChatEvent event, ConversationProvider provider) {
@@ -60,6 +61,8 @@ mixin ChatEventHandlerMixin on State<ChatScreen> {
       });
       // Add message to provider
       provider.addMessage(event.message);
+      // Scroll to show new message if user is at bottom
+      scrollToBottomIfAtBottom();
     } else if (event is ToolExecutionStarted) {
       setState(() {
         currentToolNameValue = event.toolName;

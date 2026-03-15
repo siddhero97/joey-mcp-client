@@ -51,6 +51,7 @@ class _ChatScreenState extends State<ChatScreen>
   final ScrollController _scrollController = ScrollController();
   final FocusNode _focusNode = FocusNode();
   bool _isLoading = false;
+  bool _isAtBottom = true;
   Map<String, dynamic>? _modelDetails;
   bool _hasGeneratedTitle = false;
   bool _showThinking = true;
@@ -163,6 +164,18 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   @override
+  void scrollToBottomIfAtBottom() {
+    if (!_scrollController.hasClients) return;
+    if (_isAtBottom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
     _loadModelDetails();
@@ -245,6 +258,11 @@ class _ChatScreenState extends State<ChatScreen>
       }
     };
     _serverManager.loadMcpServers(widget.conversation.id);
+
+    // Scroll to bottom after first frame (non-reversed list needs this)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+    });
   }
 
   void _onMcpStateChanged() {
@@ -329,14 +347,17 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   void _scrollToBottom() {
-    // With reverse: true on ListView, position 0 is the bottom.
-    // We only need to scroll if user has scrolled up to view history.
-    if (_scrollController.hasClients && _scrollController.position.pixels > 0) {
-      _scrollController.animateTo(
-        0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+    // With a non-reversed ListView, we scroll to maxScrollExtent.
+    if (_scrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     }
   }
 
@@ -1092,34 +1113,55 @@ class _ChatScreenState extends State<ChatScreen>
                       },
                     ),
                   Expanded(
-                    child: MessageList(
-                      conversationId: widget.conversation.id,
-                      showThinking: _showThinking,
-                      streamingContent: _streamingContent,
-                      streamingReasoning: _streamingReasoning,
-                      isLoading: _isLoading,
-                      authenticationRequired: _authenticationRequired,
-                      scrollController: _scrollController,
-                      buildCommandPalette: _buildCommandPalette,
-                      buildAuthRequiredCard: _buildAuthRequiredCard,
-                      buildLoadingIndicator: _isLoading
-                          ? () => LoadingStatusIndicator(
-                                currentToolName: _currentToolName,
-                                isToolExecuting: _isToolExecuting,
-                                currentProgress: _currentProgress,
-                              )
-                          : null,
-                      onDeleteMessage: _deleteMessage,
-                      onEditMessage: _editMessage,
-                      onRegenerateLastResponse: _regenerateLastResponse,
-                      onUrlElicitationResponse: _handleUrlElicitationResponse,
-                      onFormElicitationResponse: _handleFormElicitationResponse,
-                      webViewDisplayModes: _webViewDisplayModes,
-                      viewAvailableDisplayModes: _viewAvailableDisplayModes,
-                      webViewHeights: _webViewHeights,
-                      onSetDisplayMode: _setDisplayMode,
-                      layerLinkFor: _layerLinkFor,
-                      hostAvailableDisplayModes: _hostAvailableDisplayModes,
+                    child: Stack(
+                      children: [
+                        MessageList(
+                          conversationId: widget.conversation.id,
+                          showThinking: _showThinking,
+                          streamingContent: _streamingContent,
+                          streamingReasoning: _streamingReasoning,
+                          isLoading: _isLoading,
+                          authenticationRequired: _authenticationRequired,
+                          scrollController: _scrollController,
+                          onAtBottomChanged: (atBottom) {
+                            setState(() {
+                              _isAtBottom = atBottom;
+                            });
+                          },
+                          buildAuthRequiredCard: _buildAuthRequiredCard,
+                          buildLoadingIndicator: _isLoading
+                              ? () => LoadingStatusIndicator(
+                                    currentToolName: _currentToolName,
+                                    isToolExecuting: _isToolExecuting,
+                                    currentProgress: _currentProgress,
+                                  )
+                              : null,
+                          onDeleteMessage: _deleteMessage,
+                          onEditMessage: _editMessage,
+                          onRegenerateLastResponse: _regenerateLastResponse,
+                          onUrlElicitationResponse: _handleUrlElicitationResponse,
+                          onFormElicitationResponse: _handleFormElicitationResponse,
+                          webViewDisplayModes: _webViewDisplayModes,
+                          viewAvailableDisplayModes: _viewAvailableDisplayModes,
+                          webViewHeights: _webViewHeights,
+                          onSetDisplayMode: _setDisplayMode,
+                          layerLinkFor: _layerLinkFor,
+                          hostAvailableDisplayModes: _hostAvailableDisplayModes,
+                        ),
+                        Positioned(
+                          left: 16,
+                          right: 16,
+                          bottom: 0,
+                          child: IgnorePointer(
+                            ignoring: !_isAtBottom,
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 200),
+                              opacity: _isAtBottom ? 1.0 : 0.0,
+                              child: _buildCommandPalette(),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   _buildMessageInput(),

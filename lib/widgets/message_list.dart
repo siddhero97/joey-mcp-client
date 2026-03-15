@@ -24,7 +24,7 @@ class MessageList extends StatefulWidget {
   final ScrollController scrollController;
 
   // Callbacks
-  final Widget Function() buildCommandPalette;
+  final void Function(bool isAtBottom) onAtBottomChanged;
   final Widget Function() buildAuthRequiredCard;
   final Widget Function()? buildLoadingIndicator;
   final Future<void> Function(String messageId, ConversationProvider provider)
@@ -62,7 +62,7 @@ class MessageList extends StatefulWidget {
     required this.isLoading,
     required this.authenticationRequired,
     required this.scrollController,
-    required this.buildCommandPalette,
+    required this.onAtBottomChanged,
     required this.buildAuthRequiredCard,
     this.buildLoadingIndicator,
     required this.onDeleteMessage,
@@ -83,6 +83,80 @@ class MessageList extends StatefulWidget {
 }
 
 class _MessageListState extends State<MessageList> {
+  /// Whether the user is currently at (or near) the bottom of the list.
+  /// We auto-scroll to bottom only when this is true.
+  bool _isAtBottom = true;
+
+  /// Whether the user is actively dragging the list. Used to avoid
+  /// overriding a manual scroll with auto-scroll.
+  bool _isUserScrolling = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_onScroll);
+    // Notify parent of initial at-bottom state after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.scrollController.hasClients) return;
+      final pos = widget.scrollController.position;
+      final atBottom = pos.maxScrollExtent <= 0 ||
+          pos.pixels >= pos.maxScrollExtent - 50.0;
+      if (_isAtBottom != atBottom) {
+        _isAtBottom = atBottom;
+      }
+      widget.onAtBottomChanged(atBottom);
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!widget.scrollController.hasClients) return;
+    final pos = widget.scrollController.position;
+    // "At bottom" if content isn't scrollable, or within 50px of maxScrollExtent
+    final atBottom = pos.maxScrollExtent <= 0 ||
+        pos.pixels >= pos.maxScrollExtent - 50.0;
+    if (_isAtBottom != atBottom) {
+      _isAtBottom = atBottom;
+      widget.onAtBottomChanged(atBottom);
+    }
+  }
+
+  void _scrollToBottom({bool animate = true}) {
+    if (!widget.scrollController.hasClients) return;
+    final target = widget.scrollController.position.maxScrollExtent;
+    if (animate) {
+      widget.scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    } else {
+      widget.scrollController.jumpTo(target);
+    }
+  }
+
+  @override
+  void didUpdateWidget(MessageList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Auto-scroll to bottom when content changes and user is at the bottom
+    final contentChanged =
+        widget.streamingContent != oldWidget.streamingContent ||
+        widget.streamingReasoning != oldWidget.streamingReasoning ||
+        widget.isLoading != oldWidget.isLoading;
+
+    if (contentChanged && _isAtBottom && !_isUserScrolling) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _scrollToBottom(animate: false);
+      });
+    }
+  }
 
   /// Build full context display for mcpAppContext messages when thinking is shown.
   Widget _buildFullContextDisplay(BuildContext context, Message contextMessage) {
@@ -305,13 +379,6 @@ class _MessageListState extends State<MessageList> {
                   ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16.0,
-                  vertical: 4.0,
-                ),
-                child: widget.buildCommandPalette(),
-              ),
             ],
           );
         }
@@ -372,73 +439,78 @@ class _MessageListState extends State<MessageList> {
         final hasLoadingIndicator = widget.buildLoadingIndicator != null;
         final itemCount =
             displayMessages.length +
-            1 + // command palette
             (hasLoadingIndicator ? 1 : 0) +
             (hasStreaming ? 1 : 0) +
             (widget.authenticationRequired ? 1 : 0);
 
-        return ListView.builder(
+        return NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            if (notification is ScrollStartNotification &&
+                notification.dragDetails != null) {
+              _isUserScrolling = true;
+            } else if (notification is ScrollEndNotification) {
+              _isUserScrolling = false;
+            }
+            return false;
+          },
+          child: ListView.builder(
           controller: widget.scrollController,
-          padding: const EdgeInsets.all(16),
-          reverse: true, // Anchor to bottom, grow upward
+          padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 56),
           itemCount: itemCount,
           itemBuilder: (context, index) {
-            // Since list is reversed, index 0 is the bottom (newest)
-            // We need to map reversed index to actual items:
-            // - Index 0: command palette
-            // - Index 1: loading indicator (if present)
-            // - Next: auth card (if present)
-            // - Next: streaming (if present)
-            // - Higher indices: older messages
+            // Non-reversed list: index 0 is the top (oldest)
+            // Order: messages..., streaming, auth card, loading indicator
 
-            // Show command palette at index 0 (bottom)
-            if (index == 0) {
-              return widget.buildCommandPalette();
+            // Indices 0..displayMessages.length-1: messages in chronological order
+            if (index < displayMessages.length) {
+              // Fall through to message rendering below
+            } else {
+              // Items after messages
+              var extraIndex = index - displayMessages.length;
+
+              // Streaming content (right after messages)
+              if (hasStreaming) {
+                if (extraIndex == 0) {
+                  final streamingMessage = Message(
+                    id: 'streaming',
+                    conversationId: widget.conversationId,
+                    role: MessageRole.assistant,
+                    content: widget.streamingContent,
+                    timestamp: DateTime.now(),
+                    reasoning: widget.streamingReasoning.isNotEmpty
+                        ? widget.streamingReasoning
+                        : null,
+                  );
+                  return MessageBubble(
+                    message: streamingMessage,
+                    isStreaming: true,
+                    showThinking: widget.showThinking,
+                    onDelete: null,
+                    onEdit: null,
+                  );
+                }
+                extraIndex--;
+              }
+
+              // Auth required card
+              if (widget.authenticationRequired) {
+                if (extraIndex == 0) {
+                  return widget.buildAuthRequiredCard();
+                }
+                extraIndex--;
+              }
+
+              // Loading indicator (at bottom)
+              if (hasLoadingIndicator) {
+                if (extraIndex == 0) {
+                  return widget.buildLoadingIndicator!();
+                }
+              }
+
+              return const SizedBox.shrink();
             }
 
-            // Shift by 1 for command palette
-            var currentIndex = index - 1;
-
-            // Show loading indicator right above command palette
-            if (hasLoadingIndicator && currentIndex == 0) {
-              return widget.buildLoadingIndicator!();
-            }
-            if (hasLoadingIndicator) currentIndex--;
-
-            // Show auth required card
-            if (widget.authenticationRequired && currentIndex == 0) {
-              return widget.buildAuthRequiredCard();
-            }
-            if (widget.authenticationRequired) currentIndex--;
-
-            // Show streaming content
-            if (hasStreaming && currentIndex == 0) {
-              final streamingMessage = Message(
-                id: 'streaming',
-                conversationId: widget.conversationId,
-                role: MessageRole.assistant,
-                content: widget.streamingContent,
-                timestamp: DateTime.now(),
-                reasoning: widget.streamingReasoning.isNotEmpty
-                    ? widget.streamingReasoning
-                    : null,
-              );
-              return MessageBubble(
-                message: streamingMessage,
-                isStreaming: true,
-                showThinking: widget.showThinking,
-                onDelete: null, // Can't delete while streaming
-                onEdit: null,
-              );
-            }
-
-            // Calculate message index (reversed: higher index = older message)
-            final messageIndex = hasStreaming
-                ? currentIndex - 1
-                : currentIndex;
-            // Map to actual message (from end of list for reversed display)
-            final actualMessageIndex =
-                displayMessages.length - 1 - messageIndex;
+            final actualMessageIndex = index;
 
             if (actualMessageIndex < 0 ||
                 actualMessageIndex >= displayMessages.length) {
@@ -800,6 +872,7 @@ class _MessageListState extends State<MessageList> {
                   : null,
             );
           },
+        ),
         );
       },
     );
