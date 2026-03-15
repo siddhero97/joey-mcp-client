@@ -100,6 +100,7 @@ class _MessageListState extends State<MessageList> {
     // Notify parent of initial at-bottom state after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !widget.scrollController.hasClients) return;
+      if (widget.scrollController.positions.length != 1) return;
       final pos = widget.scrollController.position;
       final atBottom = pos.maxScrollExtent <= 0 || pos.pixels <= 50.0;
       if (_isAtBottom != atBottom) {
@@ -117,6 +118,7 @@ class _MessageListState extends State<MessageList> {
 
   void _onScroll() {
     if (!widget.scrollController.hasClients) return;
+    if (widget.scrollController.positions.length != 1) return;
     final pos = widget.scrollController.position;
     // In reversed list, position 0 = bottom. "At bottom" = within 50px of 0.
     final atBottom = pos.maxScrollExtent <= 0 || pos.pixels <= 50.0;
@@ -142,19 +144,37 @@ class _MessageListState extends State<MessageList> {
     // If streaming stopped, clear frozen state
     final isStreaming = widget.streamingContent.isNotEmpty ||
         widget.streamingReasoning.isNotEmpty;
+    final wasStreaming = oldWidget.streamingContent.isNotEmpty ||
+        oldWidget.streamingReasoning.isNotEmpty;
     if (!isStreaming) {
       _frozenStreamingContent = null;
       _frozenStreamingReasoning = null;
     }
 
+    // If streaming just started fresh, clear frozen state and reset to bottom
+    // This handles edit+resend where a new stream begins after messages are deleted.
+    if (isStreaming && !wasStreaming) {
+      _frozenStreamingContent = null;
+      _frozenStreamingReasoning = null;
+      if (!_isAtBottom) {
+        _isAtBottom = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onAtBottomChanged(true);
+        });
+      }
+    }
+
     // If the list is not scrollable, ensure we're "at bottom" and unfrozen
     if (widget.scrollController.hasClients &&
+        widget.scrollController.positions.length == 1 &&
         widget.scrollController.position.maxScrollExtent <= 0) {
       _frozenStreamingContent = null;
       _frozenStreamingReasoning = null;
       if (!_isAtBottom) {
         _isAtBottom = true;
-        widget.onAtBottomChanged(true);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onAtBottomChanged(true);
+        });
       }
     }
   }
@@ -345,10 +365,20 @@ class _MessageListState extends State<MessageList> {
       builder: (context, provider, child) {
         final messages = provider.getMessages(widget.conversationId);
 
-        if (messages.isEmpty) {
-          return Column(
-            children: [
-              Expanded(
+        final bool showEmptyState = messages.isEmpty &&
+            widget.streamingContent.isEmpty &&
+            widget.streamingReasoning.isEmpty &&
+            !widget.isLoading;
+
+        if (showEmptyState) {
+          // Render empty state inside the same ListView.builder so the
+          // ScrollController is never attached to a different scroll view.
+          return ListView.builder(
+            controller: widget.scrollController,
+            itemCount: 1,
+            itemBuilder: (context, index) {
+              return SizedBox(
+                height: MediaQuery.of(context).size.height * 0.6,
                 child: Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -379,8 +409,8 @@ class _MessageListState extends State<MessageList> {
                     ],
                   ),
                 ),
-              ),
-            ],
+              );
+            },
           );
         }
 
