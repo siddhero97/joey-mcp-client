@@ -57,7 +57,7 @@ Rendering is delegated to `MessageList` (widget) and `MessageInput` (widget).
 
 ### Gotchas
 - `ChatService` queues MCP notifications during streaming, flushes after each LLM response
-- `MessageList` uses a **non-reversed** `ListView` — messages are in chronological order (index 0 = oldest). Auto-scroll to bottom is managed by `_MessageListState` which tracks whether the user is at the bottom and scrolls on content updates.
+- `MessageList` uses a **reversed** `ListView` — index 0 is the bottom (newest). Streaming content is frozen when user scrolls up to prevent position shifting.
 - Streaming chunks use special prefixes: `TOOL_CALLS:` for tool calls, `REASONING:` for thinking content
 - MCP session IDs are persisted per conversation+server and used for session resumption
 - OpenRouter API key is stored in SharedPreferences (PKCE OAuth flow)

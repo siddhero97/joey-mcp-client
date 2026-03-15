@@ -165,14 +165,8 @@ class _ChatScreenState extends State<ChatScreen>
 
   @override
   void scrollToBottomIfAtBottom() {
-    if (!_scrollController.hasClients) return;
-    if (_isAtBottom) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
-      });
-    }
+    // With reverse: true, new content at position 0 is auto-visible.
+    // No explicit scroll needed.
   }
 
   @override
@@ -258,11 +252,6 @@ class _ChatScreenState extends State<ChatScreen>
       }
     };
     _serverManager.loadMcpServers(widget.conversation.id);
-
-    // Scroll to bottom after first frame (non-reversed list needs this)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToBottom();
-    });
   }
 
   void _onMcpStateChanged() {
@@ -347,17 +336,13 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   void _scrollToBottom() {
-    // With a non-reversed ListView, we scroll to maxScrollExtent.
-    if (_scrollController.hasClients) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+    // With reverse: true on ListView, position 0 is the bottom.
+    if (_scrollController.hasClients && _scrollController.position.pixels > 0) {
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
     }
   }
 
@@ -1148,6 +1133,7 @@ class _ChatScreenState extends State<ChatScreen>
                           layerLinkFor: _layerLinkFor,
                           hostAvailableDisplayModes: _hostAvailableDisplayModes,
                         ),
+                        // Command palette — visible when at bottom
                         Positioned(
                           left: 16,
                           right: 16,
@@ -1161,6 +1147,69 @@ class _ChatScreenState extends State<ChatScreen>
                             ),
                           ),
                         ),
+                        // "New content below" bubble — visible when scrolled up during streaming
+                        if (_isLoading && !_isAtBottom &&
+                            _scrollController.hasClients &&
+                            _scrollController.position.maxScrollExtent > 0)
+                          Positioned(
+                            bottom: 8,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: AnimatedOpacity(
+                                duration: const Duration(milliseconds: 200),
+                                opacity: 1.0,
+                                child: GestureDetector(
+                                  onTap: _scrollToBottom,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.primaryContainer,
+                                      borderRadius: BorderRadius.circular(20),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(alpha: 0.15),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        SizedBox(
+                                          width: 12,
+                                          height: 12,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'New content below',
+                                          style: TextStyle(
+                                            color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Icon(
+                                          Icons.keyboard_arrow_down,
+                                          size: 18,
+                                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
