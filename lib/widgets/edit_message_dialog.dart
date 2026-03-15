@@ -128,10 +128,11 @@ class _EditMessageDialogState extends State<EditMessageDialog> {
       title: const Text('Edit Message'),
       content: SizedBox(
         width: double.maxFinite,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             Text(
               'Edit your message below. All messages after this one will be removed, and the conversation will continue from this point.',
               style: TextStyle(
@@ -237,6 +238,7 @@ class _EditMessageDialogState extends State<EditMessageDialog> {
               autofocus: true,
             ),
           ],
+          ),
         ),
       ),
       actions: [
