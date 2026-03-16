@@ -58,18 +58,21 @@ jobs:
           echo "$NOTARY_API_KEY" | base64 --decode > /tmp/AuthKey.p8
           cd build/macos/Build/Products/Release
           zip -r Joey-notarize.zip "Joey.app"
-          xcrun notarytool submit Joey-notarize.zip \
+          SUBMIT_OUTPUT=$(xcrun notarytool submit Joey-notarize.zip \
             --key /tmp/AuthKey.p8 \
             --key-id "$NOTARY_API_KEY_ID" \
             --issuer "$NOTARY_API_ISSUER" \
-            --wait || {
-              xcrun notarytool log \
-                $(xcrun notarytool history --key /tmp/AuthKey.p8 --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER" 2>&1 | grep -m1 'id:' | awk '{print $2}') \
-                --key /tmp/AuthKey.p8 \
-                --key-id "$NOTARY_API_KEY_ID" \
-                --issuer "$NOTARY_API_ISSUER"
-              exit 1
-            }
+            --wait 2>&1) || true
+          echo "$SUBMIT_OUTPUT"
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -m1 'id:' | awk '{print $2}')
+          if echo "$SUBMIT_OUTPUT" | grep -q "Invalid"; then
+            echo "=== Notarization log ==="
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key /tmp/AuthKey.p8 \
+              --key-id "$NOTARY_API_KEY_ID" \
+              --issuer "$NOTARY_API_ISSUER"
+            exit 1
+          fi
           xcrun stapler staple "Joey.app"
           rm Joey-notarize.zip /tmp/AuthKey.p8
       - name: Zip macOS app
