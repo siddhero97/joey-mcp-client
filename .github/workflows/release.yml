@@ -43,12 +43,18 @@ jobs:
         run: |
           APP="build/macos/Build/Products/Release/Joey.app"
           IDENTITY="Developer ID Application: Benjamin Kaiser (7YUK27P5X7)"
-          # Sign all frameworks and dylibs first
-          find "$APP" -name "*.framework" -o -name "*.dylib" | while read f; do
-            codesign --force --options runtime --sign "$IDENTITY" "$f"
+          # Sign all executables inside frameworks
+          find "$APP/Contents/Frameworks" -type f -perm +111 ! -name "*.plist" ! -name "*.json" ! -name "CodeResources" | while read f; do
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
           done
-          # Sign the main app bundle
-          codesign --force --options runtime --deep --sign "$IDENTITY" "$APP"
+          # Sign all framework bundles
+          find "$APP/Contents/Frameworks" -name "*.framework" -maxdepth 1 | while read f; do
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+          done
+          # Sign the main executable
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          # Verify
+          codesign --verify --deep --strict "$APP"
       - name: Notarize macOS app
         env:
           NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
