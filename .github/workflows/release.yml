@@ -43,18 +43,42 @@ jobs:
         run: |
           APP="build/macos/Build/Products/Release/Joey.app"
           IDENTITY="Developer ID Application: Benjamin Kaiser (7YUK27P5X7)"
-          # Sign all executables inside frameworks
-          find "$APP/Contents/Frameworks" -type f -perm +111 ! -name "*.plist" ! -name "*.json" ! -name "CodeResources" | while read f; do
-            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+          ENTITLEMENTS=$(mktemp)
+          cat > "$ENTITLEMENTS" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+            <key>com.apple.security.network.client</key>
+            <true/>
+            <key>com.apple.security.files.user-selected.read-write</key>
+            <true/>
+            <key>com.apple.security.device.audio-input</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          # Sign all Mach-O binaries inside frameworks
+          find "$APP/Contents/Frameworks" -type f | while read f; do
+            if file "$f" | grep -q "Mach-O"; then
+              codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+            fi
           done
           # Sign all framework bundles
           find "$APP/Contents/Frameworks" -name "*.framework" -maxdepth 1 | while read f; do
             codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
           done
-          # Sign the main executable
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          # Sign the main app with entitlements
+          codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+          rm "$ENTITLEMENTS"
           # Verify
-          codesign --verify --deep --strict "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP" 2>&1
       - name: Notarize macOS app
         env:
           NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
