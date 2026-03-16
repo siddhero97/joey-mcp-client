@@ -1,0 +1,3 @@
+app_identifier("com.kaiserapps.joey")
+
+json_key_file("~/.config/supply/play-store-key.json")
