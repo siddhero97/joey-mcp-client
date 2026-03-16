@@ -39,6 +39,16 @@ jobs:
           sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/' macos/Runner.xcodeproj/project.pbxproj
           sed -i '' 's/"macOS"/"macosx"/' macos/Runner.xcodeproj/project.pbxproj
       - run: flutter build macos --release
+      - name: Re-sign with hardened runtime
+        run: |
+          APP="build/macos/Build/Products/Release/Joey.app"
+          IDENTITY="Developer ID Application: Benjamin Kaiser (7YUK27P5X7)"
+          # Sign all frameworks and dylibs first
+          find "$APP" -name "*.framework" -o -name "*.dylib" | while read f; do
+            codesign --force --options runtime --sign "$IDENTITY" "$f"
+          done
+          # Sign the main app bundle
+          codesign --force --options runtime --deep --sign "$IDENTITY" "$APP"
       - name: Notarize macOS app
         env:
           NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
@@ -52,7 +62,14 @@ jobs:
             --key /tmp/AuthKey.p8 \
             --key-id "$NOTARY_API_KEY_ID" \
             --issuer "$NOTARY_API_ISSUER" \
-            --wait
+            --wait || {
+              xcrun notarytool log \
+                $(xcrun notarytool history --key /tmp/AuthKey.p8 --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER" 2>&1 | grep -m1 'id:' | awk '{print $2}') \
+                --key /tmp/AuthKey.p8 \
+                --key-id "$NOTARY_API_KEY_ID" \
+                --issuer "$NOTARY_API_ISSUER"
+              exit 1
+            }
           xcrun stapler staple "Joey.app"
           rm Joey-notarize.zip /tmp/AuthKey.p8
       - name: Zip macOS app
