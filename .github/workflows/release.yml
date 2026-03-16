@@ -29,8 +29,32 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security import /tmp/certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          rm /tmp/certificate.p12
+          # Install Developer ID G2 intermediate certificate
+          curl -L -o /tmp/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import /tmp/DeveloperIDG2CA.cer -k build.keychain
+          rm /tmp/certificate.p12 /tmp/DeveloperIDG2CA.cer
+      - name: Configure code signing for Developer ID
+        run: |
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "Developer ID Application";/' macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/' macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/"macOS"/"macosx"/' macos/Runner.xcodeproj/project.pbxproj
       - run: flutter build macos --release
+      - name: Notarize macOS app
+        env:
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+        run: |
+          echo "$NOTARY_API_KEY" | base64 --decode > /tmp/AuthKey.p8
+          cd build/macos/Build/Products/Release
+          zip -r Joey-notarize.zip "Joey.app"
+          xcrun notarytool submit Joey-notarize.zip \
+            --key /tmp/AuthKey.p8 \
+            --key-id "$NOTARY_API_KEY_ID" \
+            --issuer "$NOTARY_API_ISSUER" \
+            --wait
+          xcrun stapler staple "Joey.app"
+          rm Joey-notarize.zip /tmp/AuthKey.p8
       - name: Zip macOS app
         run: |
           cd build/macos/Build/Products/Release
