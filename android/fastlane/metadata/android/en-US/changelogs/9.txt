@@ -1,0 +1,4 @@
+• Background chat processing — Agentic loops now continue running when you navigate away from a conversation
+• Smoother streaming — Inline streaming cursor and stable scroll position
+• Improved MCP reliability — More robust session resumption and callback handling
+• Bug fixes — Fixed edit message dialog overflow, edit & resend crashes, and model-change status overflow

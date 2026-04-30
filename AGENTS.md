@@ -57,8 +57,38 @@ Rendering is delegated to `MessageList` (widget) and `MessageInput` (widget).
 
 ### Gotchas
 - `ChatService` queues MCP notifications during streaming, flushes after each LLM response
-- `MessageList` uses a **reversed** `ListView` — index 0 is the bottom (newest)
+- `MessageList` uses a **reversed** `ListView` — index 0 is the bottom (newest). Streaming content is frozen when user scrolls up to prevent position shifting.
 - Streaming chunks use special prefixes: `TOOL_CALLS:` for tool calls, `REASONING:` for thinking content
 - MCP session IDs are persisted per conversation+server and used for session resumption
 - OpenRouter API key is stored in SharedPreferences (PKCE OAuth flow)
 - **DB migrations affect import/export**: The JSON export format uses `toMap()`/`fromMap()` from the models, which mirror the DB schema. When adding new columns via a migration: (1) keep new model fields nullable so `fromMap()` tolerates older exports missing the key, (2) if a new field is required, bump the export envelope version in `ConversationImportExportService` and handle the old version gracefully, (3) update the schema version number in this file
+
+## Publishing
+
+### Version Bumping
+- Version is in `pubspec.yaml` as `version: X.Y.Z+buildNumber` (e.g. `1.2.0+10`)
+- Bump both the version name and build number for each release
+- iOS version must be higher than the currently live App Store version (currently `1.1`), so use `1.2.0+` or higher
+- Build numbers must be strictly increasing across both platforms
+
+### Android (Google Play)
+- **Build**: `flutter build appbundle --release`
+- **Deploy**: `cd android && fastlane deploy`
+- Fastlane config is in `android/fastlane/` with the Appfile and Fastfile
+- Google Play service account key is stored at `~/.config/supply/play-store-key.json` (not in repo)
+- Changelogs go in `android/fastlane/metadata/android/en-US/changelogs/{buildNumber}.txt`
+
+### iOS (App Store)
+- **Build**: `flutter build ipa --release`
+- **Deploy**: `cd ios && fastlane deploy`
+- **TestFlight only**: `cd ios && fastlane beta`
+- Fastlane config is in `ios/fastlane/` with the Appfile and Fastfile
+- App Store Connect API key is stored at `~/.config/appstore/AuthKey_L2XRGXQYP6.p8` (not in repo)
+- The `deploy` lane uploads to App Store Connect, runs precheck, submits for review, and auto-releases on approval
+- The `beta` lane uploads to TestFlight and skips waiting for build processing
+- Release notes go in `ios/fastlane/metadata/en-US/release_notes.txt` (required for review submission)
+
+### Desktop (GitHub Release)
+- **Trigger**: `gh workflow run release.yml -f version=X.Y.Z` kicks off macOS, Windows, and Linux builds in parallel
+- Workflow creates a GitHub release `vX.Y.Z` with all three platform artifacts attached
+- Windows and Linux builds are experimental

@@ -1,0 +1,189 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g. 1.2.0)'
+        required: true
+        type: string
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import /tmp/certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          # Install Developer ID G2 intermediate certificate
+          curl -L -o /tmp/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import /tmp/DeveloperIDG2CA.cer -k build.keychain
+          rm /tmp/certificate.p12 /tmp/DeveloperIDG2CA.cer
+      - name: Configure code signing for Developer ID
+        run: |
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "Developer ID Application";/' macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/' macos/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/"macOS"/"macosx"/' macos/Runner.xcodeproj/project.pbxproj
+      - run: flutter build macos --release
+      - name: Re-sign with hardened runtime
+        run: |
+          APP="build/macos/Build/Products/Release/Joey.app"
+          IDENTITY="Developer ID Application: Benjamin Kaiser (7YUK27P5X7)"
+          ENTITLEMENTS=$(mktemp)
+          cat > "$ENTITLEMENTS" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+            <key>com.apple.security.network.client</key>
+            <true/>
+            <key>com.apple.security.files.user-selected.read-write</key>
+            <true/>
+            <key>com.apple.security.device.audio-input</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          # Sign all Mach-O binaries inside frameworks
+          find "$APP/Contents/Frameworks" -type f | while read f; do
+            if file "$f" | grep -q "Mach-O"; then
+              codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+            fi
+          done
+          # Sign all framework bundles
+          find "$APP/Contents/Frameworks" -name "*.framework" -maxdepth 1 | while read f; do
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+          done
+          # Sign the main app with entitlements
+          codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+          rm "$ENTITLEMENTS"
+          # Verify
+          codesign --verify --deep --strict --verbose=2 "$APP" 2>&1
+      - name: Notarize macOS app
+        env:
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+        run: |
+          echo "$NOTARY_API_KEY" | base64 --decode > /tmp/AuthKey.p8
+          cd build/macos/Build/Products/Release
+          zip -ry Joey-notarize.zip "Joey.app"
+          SUBMIT_OUTPUT=$(xcrun notarytool submit Joey-notarize.zip \
+            --key /tmp/AuthKey.p8 \
+            --key-id "$NOTARY_API_KEY_ID" \
+            --issuer "$NOTARY_API_ISSUER" \
+            --wait 2>&1) || true
+          echo "$SUBMIT_OUTPUT"
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -m1 'id:' | awk '{print $2}')
+          if echo "$SUBMIT_OUTPUT" | grep -q "Invalid"; then
+            echo "=== Notarization log ==="
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key /tmp/AuthKey.p8 \
+              --key-id "$NOTARY_API_KEY_ID" \
+              --issuer "$NOTARY_API_ISSUER"
+            exit 1
+          fi
+          xcrun stapler staple "Joey.app"
+          rm Joey-notarize.zip /tmp/AuthKey.p8
+      - name: Zip macOS app
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -ry Joey-macOS-v${{ inputs.version }}.zip "Joey.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: build/macos/Build/Products/Release/Joey-macOS-v${{ inputs.version }}.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Zip Windows build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "Joey-Windows-v${{ inputs.version }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: Joey-Windows-v${{ inputs.version }}.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev libwebkit2gtk-4.1-dev
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: Create tar.gz archive
+        run: |
+          cd build/linux/x64/release/bundle
+          tar -czf Joey-Linux-v${{ inputs.version }}.tar.gz *
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: build/linux/x64/release/bundle/Joey-Linux-v${{ inputs.version }}.tar.gz
+
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Joey v${{ inputs.version }}
+          body: |
+            ## Joey v${{ inputs.version }} — Desktop Builds
+
+            Desktop builds for Joey MCP Client.
+
+            ### Downloads
+            - **macOS**: `Joey-macOS-v${{ inputs.version }}.zip` — Unzip and move Joey.app to Applications
+            - **Windows**: `Joey-Windows-v${{ inputs.version }}.zip` — Unzip and run Joey.exe
+            - **Linux**: `Joey-Linux-v${{ inputs.version }}.tar.gz` — Extract and run the joey binary
+
+            > **Note:** Windows and Linux builds are experimental. macOS, iOS, and Android are the primary supported platforms.
+
+            ### Mobile
+            - iOS: [App Store](https://apps.apple.com/us/app/joey-mcp-client/id6759186174)
+            - Android: [Google Play](https://play.google.com/store/apps/details?id=com.kaiserapps.joey)
+          files: |
+            artifacts/macos-build/*
+            artifacts/windows-build/*
+            artifacts/linux-build/*

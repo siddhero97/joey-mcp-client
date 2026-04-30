@@ -11,6 +11,10 @@
   </a>
 </p>
 
+<p align="center">
+  Desktop builds (macOS, Windows, Linux) are available in <a href="https://github.com/benkaiser/joey-mcp-client/releases">GitHub Releases</a>. Windows and Linux builds are experimental.
+</p>
+
 A cross-platform chat application built with Flutter that connects to AI models via [OpenRouter](https://openrouter.ai/) and remote [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) servers over Streamable HTTP.
 
 ## Key Features

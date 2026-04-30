@@ -24,7 +24,7 @@ class MessageList extends StatefulWidget {
   final ScrollController scrollController;
 
   // Callbacks
-  final Widget Function() buildCommandPalette;
+  final void Function(bool isAtBottom) onAtBottomChanged;
   final Widget Function() buildAuthRequiredCard;
   final Widget Function()? buildLoadingIndicator;
   final Future<void> Function(String messageId, ConversationProvider provider)
@@ -62,7 +62,7 @@ class MessageList extends StatefulWidget {
     required this.isLoading,
     required this.authenticationRequired,
     required this.scrollController,
-    required this.buildCommandPalette,
+    required this.onAtBottomChanged,
     required this.buildAuthRequiredCard,
     this.buildLoadingIndicator,
     required this.onDeleteMessage,
@@ -83,6 +83,101 @@ class MessageList extends StatefulWidget {
 }
 
 class _MessageListState extends State<MessageList> {
+  /// Whether the user is currently at (or near) the bottom of the list.
+  /// In a reversed ListView, "at bottom" means scroll offset ≈ 0.
+  bool _isAtBottom = true;
+
+  /// Frozen snapshot of streaming content shown when user scrolls up.
+  /// This prevents the streaming bubble at index 0 from growing and
+  /// shifting the user's scroll position.
+  String? _frozenStreamingContent;
+  String? _frozenStreamingReasoning;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_onScroll);
+    // Notify parent of initial at-bottom state after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.scrollController.hasClients) return;
+      if (widget.scrollController.positions.length != 1) return;
+      final pos = widget.scrollController.position;
+      final atBottom = pos.maxScrollExtent <= 0 || pos.pixels <= 50.0;
+      if (_isAtBottom != atBottom) {
+        _isAtBottom = atBottom;
+      }
+      widget.onAtBottomChanged(atBottom);
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!widget.scrollController.hasClients) return;
+    if (widget.scrollController.positions.length != 1) return;
+    final pos = widget.scrollController.position;
+    // In reversed list, position 0 = bottom. "At bottom" = within 50px of 0.
+    final atBottom = pos.maxScrollExtent <= 0 || pos.pixels <= 50.0;
+    if (_isAtBottom != atBottom) {
+      _isAtBottom = atBottom;
+      if (atBottom) {
+        // User returned to bottom — unfreeze streaming content
+        _frozenStreamingContent = null;
+        _frozenStreamingReasoning = null;
+      } else {
+        // User scrolled up — freeze current streaming content
+        _frozenStreamingContent = widget.streamingContent;
+        _frozenStreamingReasoning = widget.streamingReasoning;
+      }
+      widget.onAtBottomChanged(atBottom);
+    }
+  }
+
+  @override
+  void didUpdateWidget(MessageList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // If streaming stopped, clear frozen state
+    final isStreaming = widget.streamingContent.isNotEmpty ||
+        widget.streamingReasoning.isNotEmpty;
+    final wasStreaming = oldWidget.streamingContent.isNotEmpty ||
+        oldWidget.streamingReasoning.isNotEmpty;
+    if (!isStreaming) {
+      _frozenStreamingContent = null;
+      _frozenStreamingReasoning = null;
+    }
+
+    // If streaming just started fresh, clear frozen state and reset to bottom
+    // This handles edit+resend where a new stream begins after messages are deleted.
+    if (isStreaming && !wasStreaming) {
+      _frozenStreamingContent = null;
+      _frozenStreamingReasoning = null;
+      if (!_isAtBottom) {
+        _isAtBottom = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onAtBottomChanged(true);
+        });
+      }
+    }
+
+    // If the list is not scrollable, ensure we're "at bottom" and unfrozen
+    if (widget.scrollController.hasClients &&
+        widget.scrollController.positions.length == 1 &&
+        widget.scrollController.position.maxScrollExtent <= 0) {
+      _frozenStreamingContent = null;
+      _frozenStreamingReasoning = null;
+      if (!_isAtBottom) {
+        _isAtBottom = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onAtBottomChanged(true);
+        });
+      }
+    }
+  }
 
   /// Build full context display for mcpAppContext messages when thinking is shown.
   Widget _buildFullContextDisplay(BuildContext context, Message contextMessage) {
@@ -270,10 +365,20 @@ class _MessageListState extends State<MessageList> {
       builder: (context, provider, child) {
         final messages = provider.getMessages(widget.conversationId);
 
-        if (messages.isEmpty) {
-          return Column(
-            children: [
-              Expanded(
+        final bool showEmptyState = messages.isEmpty &&
+            widget.streamingContent.isEmpty &&
+            widget.streamingReasoning.isEmpty &&
+            !widget.isLoading;
+
+        if (showEmptyState) {
+          // Render empty state inside the same ListView.builder so the
+          // ScrollController is never attached to a different scroll view.
+          return ListView.builder(
+            controller: widget.scrollController,
+            itemCount: 1,
+            itemBuilder: (context, index) {
+              return SizedBox(
+                height: MediaQuery.of(context).size.height * 0.6,
                 child: Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -304,15 +409,8 @@ class _MessageListState extends State<MessageList> {
                     ],
                   ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16.0,
-                  vertical: 4.0,
-                ),
-                child: widget.buildCommandPalette(),
-              ),
-            ],
+              );
+            },
           );
         }
 
@@ -365,80 +463,73 @@ class _MessageListState extends State<MessageList> {
           }
         }
 
+        // Use frozen content when user has scrolled up to prevent
+        // the streaming bubble from growing and shifting their position.
+        final displayStreamingContent = _frozenStreamingContent ?? widget.streamingContent;
+        final displayStreamingReasoning = _frozenStreamingReasoning ?? widget.streamingReasoning;
+
         // Calculate total item count
         final hasStreaming =
-            widget.streamingContent.isNotEmpty ||
-            widget.streamingReasoning.isNotEmpty;
+            displayStreamingContent.isNotEmpty ||
+            displayStreamingReasoning.isNotEmpty;
         final hasLoadingIndicator = widget.buildLoadingIndicator != null;
         final itemCount =
             displayMessages.length +
-            1 + // command palette
             (hasLoadingIndicator ? 1 : 0) +
             (hasStreaming ? 1 : 0) +
             (widget.authenticationRequired ? 1 : 0);
 
         return ListView.builder(
           controller: widget.scrollController,
-          padding: const EdgeInsets.all(16),
-          reverse: true, // Anchor to bottom, grow upward
+          padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 56),
+          reverse: true,
           itemCount: itemCount,
           itemBuilder: (context, index) {
-            // Since list is reversed, index 0 is the bottom (newest)
-            // We need to map reversed index to actual items:
-            // - Index 0: command palette
-            // - Index 1: loading indicator (if present)
-            // - Next: auth card (if present)
-            // - Next: streaming (if present)
-            // - Higher indices: older messages
+            // Reversed list: index 0 is the bottom (newest)
+            // Order from bottom: loading indicator, auth card, streaming, messages...
+            var currentIndex = index;
 
-            // Show command palette at index 0 (bottom)
-            if (index == 0) {
-              return widget.buildCommandPalette();
+            // Loading indicator at the very bottom
+            if (hasLoadingIndicator) {
+              if (currentIndex == 0) {
+                return widget.buildLoadingIndicator!();
+              }
+              currentIndex--;
             }
 
-            // Shift by 1 for command palette
-            var currentIndex = index - 1;
-
-            // Show loading indicator right above command palette
-            if (hasLoadingIndicator && currentIndex == 0) {
-              return widget.buildLoadingIndicator!();
+            // Auth required card
+            if (widget.authenticationRequired) {
+              if (currentIndex == 0) {
+                return widget.buildAuthRequiredCard();
+              }
+              currentIndex--;
             }
-            if (hasLoadingIndicator) currentIndex--;
 
-            // Show auth required card
-            if (widget.authenticationRequired && currentIndex == 0) {
-              return widget.buildAuthRequiredCard();
-            }
-            if (widget.authenticationRequired) currentIndex--;
-
-            // Show streaming content
+            // Streaming content
             if (hasStreaming && currentIndex == 0) {
               final streamingMessage = Message(
                 id: 'streaming',
                 conversationId: widget.conversationId,
                 role: MessageRole.assistant,
-                content: widget.streamingContent,
+                content: displayStreamingContent,
                 timestamp: DateTime.now(),
-                reasoning: widget.streamingReasoning.isNotEmpty
-                    ? widget.streamingReasoning
+                reasoning: displayStreamingReasoning.isNotEmpty
+                    ? displayStreamingReasoning
                     : null,
               );
               return MessageBubble(
                 message: streamingMessage,
                 isStreaming: true,
                 showThinking: widget.showThinking,
-                onDelete: null, // Can't delete while streaming
+                onDelete: null,
                 onEdit: null,
               );
             }
+            if (hasStreaming) currentIndex--;
 
-            // Calculate message index (reversed: higher index = older message)
-            final messageIndex = hasStreaming
-                ? currentIndex - 1
-                : currentIndex;
-            // Map to actual message (from end of list for reversed display)
+            // Messages (reversed: higher index = older message)
             final actualMessageIndex =
-                displayMessages.length - 1 - messageIndex;
+                displayMessages.length - 1 - currentIndex;
 
             if (actualMessageIndex < 0 ||
                 actualMessageIndex >= displayMessages.length) {
